@@ -65,7 +65,7 @@ def run_app():
                 
                 num_seats = st.session_state.seats
                 total_ballots = len(ballots)
-                quota = np.floor(total_ballots / (num_seats + 1)) + 1
+                quota = np.floor(total_ballots / (num_seats + 1)) + 0.001
                 
                 keep_values = {cand: 1.0 for cand in all_candidates}
                 status = {cand: "Active" for cand in all_candidates}
