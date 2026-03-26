@@ -18,7 +18,6 @@ def run_app():
     # File Selection Interface
     with st.expander("File Import", expanded=not st.session_state.election_started):
         col1, col2 = st.columns(2)
-        # Using keys to preserve state across reruns
         votes_file = col1.file_uploader("Upload Ranked Choice CSV", type=['csv'], key="votes_uploader")
         gender_file = col2.file_uploader("Upload Candidate Gender CSV", type=['csv'], key="gender_uploader")
 
@@ -26,11 +25,21 @@ def run_app():
         votes_df = pd.read_csv(votes_file)
         gender_df = pd.read_csv(gender_file)
         
+        # Clean candidate names and genders to prevent mismatch errors
+        gender_df.iloc[:, 0] = gender_df.iloc[:, 0].astype(str).str.strip()
+        gender_df.iloc[:, 1] = gender_df.iloc[:, 1].astype(str).str.strip().str.upper()
+        
         gender_map = dict(zip(gender_df.iloc[:, 0], gender_df.iloc[:, 1]))
         all_candidates = list(gender_map.keys())
         
-        ballots = votes_df.iloc[:, 1:].values.tolist()
-        ballots = [[str(c).strip() for c in b if pd.notna(c) and str(c).strip() != ''] for b in ballots]
+        raw_ballots = votes_df.iloc[:, 1:].values.tolist()
+        ballots = []
+        for b in raw_ballots:
+            # Clean names and filter out invalid/unrecognized candidates
+            cleaned_b = [str(c).strip() for c in b if pd.notna(c) and str(c).strip() != '']
+            valid_b = [c for c in cleaned_b if c in all_candidates]
+            if valid_b: 
+                ballots.append(valid_b)
 
         if not st.session_state.election_started:
             c1, c2 = st.columns(2)
@@ -63,27 +72,44 @@ def run_app():
                 
                 chart_placeholder = st.empty()
 
-                def update_viz(tallies, current_status, step_name, final=False):
+                def update_viz(tallies, current_status, step_name):
+                    # Determine categories for color mapping
+                    categories = []
+                    for c in tallies.keys():
+                        if current_status[c] == "Eliminated":
+                            categories.append("Eliminated")
+                        else:
+                            g = gender_map.get(c, "")
+                            if g == "M": categories.append("Male")
+                            elif g == "F": categories.append("Female")
+                            elif g == "N": categories.append("Nonbinary")
+                            else: categories.append("Unknown")
+
                     df_viz = pd.DataFrame({
                         'Candidate': list(tallies.keys()),
                         'Votes': list(tallies.values()),
-                        'Status': [current_status[c] for c in tallies.keys()]
+                        'Category': categories
                     })
                     
-                    # Highlight logic: Final winners get a distinct "Winner" status for the color map
-                    if final:
-                        df_viz['Status'] = df_viz.apply(lambda x: "Winner" if x['Status'] == "Elected" else x['Status'], axis=1)
-
                     fig = px.bar(df_viz, x='Votes', y='Candidate', orientation='h',
-                                 color='Status', 
+                                 color='Category', text='Votes',
                                  title=f"Step: {step_name}",
                                  color_discrete_map={
-                                     "Active": "#636EFA", 
-                                     "Elected": "#00CC96", 
-                                     "Eliminated": "#EF553B",
-                                     "Winner": "#FFD700" # Gold for final winners
+                                     "Male": "blue", 
+                                     "Female": "red", 
+                                     "Nonbinary": "green",
+                                     "Eliminated": "grey",
+                                     "Unknown": "black"
                                  })
-                    fig.add_vline(x=quota, line_dash="dash", line_color="red", annotation_text=f"Quota: {quota}")
+                    
+                    # Format data labels to 2 decimal places and place them outside the bars
+                    fig.update_traces(texttemplate='%{text:.2f}', textposition='outside')
+                    fig.add_vline(x=quota, line_dash="dash", line_color="black", annotation_text=f"Quota: {quota}")
+                    
+                    # Lock the x-axis range so the chart doesn't jump around
+                    max_x = max(max(tallies.values()) * 1.15, quota * 1.15)
+                    fig.update_layout(xaxis_range=[0, max_x])
+                    
                     chart_placeholder.plotly_chart(fig, use_container_width=True)
                     time.sleep(st.session_state.step_delay)
 
@@ -120,7 +146,6 @@ def run_app():
                         
                         for cand in all_candidates:
                             if status[cand] == "Elected":
-                                # Avoid division by zero
                                 t_val = max(current_tallies[cand], 0.0001)
                                 keep_values[cand] = (keep_values[cand] * quota) / t_val
                             elif status[cand] == "Eliminated":
@@ -152,8 +177,11 @@ def run_app():
 
                     if len(winners) >= num_seats or not active_cands:
                         election_complete = True
-                        update_viz(current_tallies, status, "Election Complete - Winners Highlighted", final=True)
-                        st.success(f"Election Concluded. Winners: {', '.join(winners)}")
+                        update_viz(current_tallies, status, "Election Complete")
+                        
+                        # Added an explicit success message to declare winners at the end
+                        final_winners = [c for c, s in status.items() if s == "Elected"]
+                        st.success(f"Election Concluded. Winners: {', '.join(final_winners)}")
                         break
 
                     if not any(current_tallies[c] >= quota for c in active_cands):
